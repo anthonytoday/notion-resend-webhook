@@ -1,0 +1,17 @@
+{
+  "name": "notion-download-webhook",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker: Notion Marketplace template download -> Resend contact + Automation trigger + Google Sheets reporting row.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "check": "node --check worker-dropin.js",
+    "test": "node _test-dropin.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

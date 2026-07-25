@@ -1,0 +1,27 @@
+# Keep the existing worker name: renaming changes the public URL and would
+# break the Notion profile webhook until it is updated there too.
+name = "notion-mailerlite-webhook"
+main = "worker-dropin.js"
+compatibility_date = "2026-06-11"
+
+[observability]
+enabled = true
+
+[vars]
+# Resend segment for new downloaders. "General" segment in your account.
+RESEND_SEGMENT_ID = "3bd09f4b-0b72-4ed3-b5d2-f4c40dd99bfe"
+
+# Leave commented until the Resend Automation is built and published.
+# Setting this makes the worker fire automation triggers.
+# RESEND_EVENT_NAME = "template.downloaded"
+
+# Optional: dedupe repeat downloads so they do not re-enroll in the chain.
+# Create with: wrangler kv namespace create DEDUPE
+# then paste the id below and uncomment.
+# [[kv_namespaces]]
+# binding = "DEDUPE"
+# id = "PASTE_KV_NAMESPACE_ID"
+
+# Secrets (never in this file — set via `wrangler secret put` or GitHub repo secrets):
+#   RESEND_API_KEY
+#   GSHEET_WEBHOOK_URL

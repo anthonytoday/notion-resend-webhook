@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+*.log
+.DS_Store
+
+# Deployment is handled by Cloudflare Workers Builds (Worker -> Settings -> Build).
+# A GitHub Actions workflow is deliberately not included: it would need a token with
+# `workflow` scope, and two deploy paths would race each other.
+.github/

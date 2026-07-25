@@ -5,7 +5,10 @@ node_modules/
 *.log
 .DS_Store
 
-# Deployment is handled by Cloudflare Workers Builds (Worker -> Settings -> Build).
-# A GitHub Actions workflow is deliberately not included: it would need a token with
-# `workflow` scope, and two deploy paths would race each other.
-.github/
+# NEVER commit. Holds the GitHub PAT.
+credentials.md
+*credentials*
+
+# Dead speculative first draft, superseded by worker-dropin.js. Kept locally only.
+src/
+_test.mjs

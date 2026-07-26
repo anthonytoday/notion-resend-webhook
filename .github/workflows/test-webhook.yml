@@ -1,0 +1,43 @@
+name: Test webhook
+
+# Fires a synthetic Notion Marketplace payload at the live worker and prints the
+# response. Runs on a GitHub runner, so it needs no local terminal.
+# Run it from: Actions -> Test webhook -> Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: 'Email to send in the test payload'
+        required: true
+        default: 'test+wh@anthonytoday.com'
+      template:
+        description: 'Template name'
+        required: true
+        default: 'Webhook Test'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check (GET)
+        run: |
+          curl -sS -w '\nHTTP %{http_code}\n' \
+            https://notion-mailerlite-webhook.learningamazonfba.workers.dev/
+
+      - name: Fire test payload (POST)
+        run: |
+          curl -sS -w '\nHTTP %{http_code}\n' \
+            -X POST https://notion-mailerlite-webhook.learningamazonfba.workers.dev/ \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "time": '"$(date +%s000)"',
+              "event": "template.acquired",
+              "acquisitionId": "test-'"$GITHUB_RUN_ID"'",
+              "templateName": "${{ inputs.template }}",
+              "templateSlug": "webhook-test",
+              "listingPrice": 0,
+              "totalCustomerPayment": 0,
+              "source": "github-actions-test",
+              "customerEmail": "${{ inputs.email }}"
+            }'

@@ -25,10 +25,9 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Secrets are pushed on every deploy so Cloudflare and this repo cannot drift.
-          secrets: |
-            RESEND_API_KEY
-            GSHEET_WEBHOOK_URL
-        env:
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          GSHEET_WEBHOOK_URL: ${{ secrets.GSHEET_WEBHOOK_URL }}
+          # --keep-vars is load-bearing. GSHEET_WEBHOOK_URL and MAILERLITE_GROUP_ID
+          # are plaintext vars set in the Cloudflare dashboard and are NOT in
+          # wrangler.toml. A plain `wrangler deploy` deletes dashboard vars that the
+          # config file does not declare, which would silently break Sheet logging.
+          # Encrypted secrets (RESEND_API_KEY) survive a deploy either way.
+          command: deploy --keep-vars

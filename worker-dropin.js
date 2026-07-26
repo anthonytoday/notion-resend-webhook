@@ -163,10 +163,47 @@ export default {
               // 409 = contact already exists. Normal on a repeat download.
               if (!rsResponse.ok && rsResponse.status !== 409) {
                 console.error(`Resend error: ${rsResponse.status} - ${rsData}`);
+                return;
               } else if (rsResponse.status === 409) {
                 console.log(`${buyerEmail} already a Resend contact (repeat download)`);
               } else {
                 console.log(`Successfully added ${buyerEmail} to Resend`);
+              }
+
+              // Segment attachment, explicitly.
+              //
+              // The inline `segments` array above is best-effort: Resend documents
+              // segment membership as its own endpoint
+              // (POST /contacts/{id}/segments/{segment_id}), and an unsupported field
+              // on the create call is silently dropped rather than rejected. Without
+              // this second call a repeat downloader (409, no create side effects) or
+              // an ignored inline field would leave the contact outside the segment
+              // and therefore outside every broadcast. Cheap call, removes the doubt.
+              if (env.RESEND_SEGMENT_ID) {
+                let contactRef = buyerEmail; // contacts are addressable by email
+                try {
+                  const parsed = JSON.parse(rsData);
+                  if (parsed && parsed.id) contactRef = parsed.id;
+                } catch (err) { /* 409 bodies are not always JSON */ }
+
+                const segResponse = await fetch(
+                  `https://api.resend.com/contacts/${encodeURIComponent(contactRef)}/segments/${encodeURIComponent(env.RESEND_SEGMENT_ID)}`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+                    },
+                  }
+                );
+
+                if (segResponse.ok || segResponse.status === 409) {
+                  console.log(`${buyerEmail} is in segment ${env.RESEND_SEGMENT_ID}`);
+                } else {
+                  console.error(
+                    `Segment attach failed: ${segResponse.status} - ${await segResponse.text()}`
+                  );
+                }
               }
             } catch (error) {
               console.error('Error calling Resend:', error.message);

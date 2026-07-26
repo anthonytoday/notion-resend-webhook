@@ -61,9 +61,35 @@ export default {
       // marketplace payload shape differs on non-gated or newer listings.
       const buyerEmail = payload.customerEmail || payload.email || '';
       const templateName = payload.templateName || payload.template || 'unknown';
-      const customerName = payload.customerName || payload.name || '';
-      const firstName = customerName.split(' ')[0] || '';
-      const lastName = customerName.split(' ').slice(1).join(' ') || '';
+
+      // NAME HANDLING — fixed July 26, 2026.
+      //
+      // Notion's marketplace payload carries NO buyer name. It does send a top-level
+      // `name` field, but that holds the TEMPLATE title. The old fallback chain
+      // (`payload.customerName || payload.name`) therefore wrote template titles into
+      // the contact's name, e.g. first_name "Simple" / last_name "Student Planner 2026
+      // - Ace Your Classes". Any {{ first_name }} token in the email chain would then
+      // render as a fragment of a product title.
+      //
+      // `payload.name` is now excluded outright, and whatever survives is checked
+      // against the template title before it is accepted. Empty is correct and safe:
+      // greetings in the chain are name-optional ("Hey,") and personalization runs on
+      // the template_purchased property instead, which is populated reliably.
+      const norm = (s) => String(s || '').trim().toLowerCase();
+      const rawName = payload.customerName || payload.buyerName || payload.customer_name || '';
+
+      let customerName = String(rawName || '').trim();
+      if (customerName && norm(customerName) === norm(templateName)) {
+        console.warn(`Discarding name "${customerName}" — it matches the template title`);
+        customerName = '';
+      }
+      if (customerName && norm(templateName).startsWith(norm(customerName))) {
+        console.warn(`Discarding name "${customerName}" — it is a prefix of the template title`);
+        customerName = '';
+      }
+
+      const firstName = customerName ? customerName.split(' ')[0] : '';
+      const lastName = customerName ? customerName.split(' ').slice(1).join(' ') : '';
 
       if (!env.GSHEET_WEBHOOK_URL) {
         console.error('GSHEET_WEBHOOK_URL is not set');
@@ -163,28 +189,21 @@ export default {
               // 409 = contact already exists. Normal on a repeat download.
               if (!rsResponse.ok && rsResponse.status !== 409) {
                 console.error(`Resend error: ${rsResponse.status} - ${rsData}`);
-                return;
               } else if (rsResponse.status === 409) {
                 console.log(`${buyerEmail} already a Resend contact (repeat download)`);
               } else {
                 console.log(`Successfully added ${buyerEmail} to Resend`);
               }
 
-              // Segment attachment, explicitly.
-              //
-              // The inline `segments` array above is best-effort: Resend documents
-              // segment membership as its own endpoint
-              // (POST /contacts/{id}/segments/{segment_id}), and an unsupported field
-              // on the create call is silently dropped rather than rejected. Without
-              // this second call a repeat downloader (409, no create side effects) or
-              // an ignored inline field would leave the contact outside the segment
-              // and therefore outside every broadcast. Cheap call, removes the doubt.
+              // Belt-and-braces segment attach. `segments` in the create body above
+              // covers new contacts, but a repeat downloader returns 409 and is never
+              // re-segmented by that path. This explicit call catches them.
               if (env.RESEND_SEGMENT_ID) {
-                let contactRef = buyerEmail; // contacts are addressable by email
+                let contactRef = buyerEmail;
                 try {
                   const parsed = JSON.parse(rsData);
                   if (parsed && parsed.id) contactRef = parsed.id;
-                } catch (err) { /* 409 bodies are not always JSON */ }
+                } catch (err) { /* 409 body is not JSON; fall back to the email */ }
 
                 const segResponse = await fetch(
                   `https://api.resend.com/contacts/${encodeURIComponent(contactRef)}/segments/${encodeURIComponent(env.RESEND_SEGMENT_ID)}`,
@@ -200,9 +219,7 @@ export default {
                 if (segResponse.ok || segResponse.status === 409) {
                   console.log(`${buyerEmail} is in segment ${env.RESEND_SEGMENT_ID}`);
                 } else {
-                  console.error(
-                    `Segment attach failed: ${segResponse.status} - ${await segResponse.text()}`
-                  );
+                  console.error(`Segment attach failed: ${segResponse.status} - ${await segResponse.text()}`);
                 }
               }
             } catch (error) {

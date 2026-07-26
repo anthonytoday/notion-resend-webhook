@@ -1,64 +1,68 @@
 /**
- * Google Apps Script Web App — receives rows from the Cloudflare Worker.
+ * Google Apps Script Web App — receives the raw Notion payload from the worker.
  *
- * Use this if SHEETS_MODE = "apps_script" (recommended: no service account,
- * no private key in Cloudflare, no OAuth token exchange).
+ * CONTRACT: the worker forwards Notion's payload unchanged:
+ *   { customerEmail, templateName, customerName, ... }
+ * The previous version of this file expected { row: [...] } and would have
+ * silently failed on every request. Do not reintroduce that shape without
+ * changing the worker to match.
+ *
+ * Bound to: https://docs.google.com/spreadsheets/d/1lg8loH7k0lTAS9cactKlbJ0Tbb1gEtG_6x8Af0sKfBg
  *
  * Setup:
- *   1. Open the reporting Google Sheet -> Extensions -> Apps Script.
- *   2. Paste this file, replace SHEET_NAME if your tab is not "Downloads".
- *   3. Deploy -> New deployment -> Web app.
- *        Execute as: Me
- *        Who has access: Anyone
- *   4. Copy the /exec URL -> that is SHEETS_WEBAPP_URL.
- *   5. Set SHARED_SECRET below to the same value as the worker's WEBHOOK_SECRET.
+ *   1. That Sheet -> Extensions -> Apps Script -> paste this file.
+ *   2. Deploy -> New deployment -> Web app. Execute as: Me. Access: Anyone.
+ *   3. Copy the /exec URL into the GSHEET_WEBHOOK_URL repo secret.
  */
 
 const SHEET_NAME = 'Downloads';
-const SHARED_SECRET = 'PASTE_SAME_VALUE_AS_WEBHOOK_SECRET';
+const HEADERS = [
+  'Timestamp (UTC)', 'Email', 'Name', 'Template', 'Event', 'Raw payload'
+];
 
 function doPost(e) {
   try {
-    const body = JSON.parse(e.postData.contents);
+    const raw = (e && e.postData && e.postData.contents) || '{}';
+    let body = {};
+    try { body = JSON.parse(raw); } catch (err) { body = {}; }
 
-    if (SHARED_SECRET !== 'PASTE_SAME_VALUE_AS_WEBHOOK_SECRET') {
-      const provided = (body.secret || (e.parameter && e.parameter.token) || '');
-      if (provided !== SHARED_SECRET) {
-        return ContentService.createTextOutput(
-          JSON.stringify({ ok: false, error: 'unauthorized' })
-        ).setMimeType(ContentService.MimeType.JSON);
-      }
+    // Back-compat: accept the older { row: [...] } shape if anything still sends it.
+    if (Array.isArray(body.row)) {
+      sheet_().appendRow(body.row);
+      return json_({ ok: true, mode: 'row' });
     }
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = ss.getSheetByName(SHEET_NAME);
+    const email = String(body.customerEmail || body.email || '').trim().toLowerCase();
+    const name = String(body.customerName || body.name || '');
+    const template = String(body.templateName || body.template || '');
+    const event = String(body.type || body.event || 'download');
 
-    if (!sheet) {
-      sheet = ss.insertSheet(SHEET_NAME);
-      sheet.appendRow([
-        'Timestamp',
-        'Email',
-        'First Name',
-        'Template',
-        'Category',
-        'Source',
-        'Event ID',
-      ]);
-    }
+    sheet_().appendRow([
+      new Date().toISOString(), email, name, template, event, raw
+    ]);
 
-    sheet.appendRow(body.row);
-
-    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(
-      ContentService.MimeType.JSON
-    );
+    return json_({ ok: true, email: email });
   } catch (err) {
-    return ContentService.createTextOutput(
-      JSON.stringify({ ok: false, error: String(err) })
-    ).setMimeType(ContentService.MimeType.JSON);
+    return json_({ ok: false, error: String(err) });
   }
 }
 
-function doGet() {
-  return ContentService.createTextOutput(JSON.stringify({ ok: true, service: 'sheets-receiver' }))
+function sheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+    sheet.appendRow(HEADERS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doGet() {
+  return json_({ ok: true, service: 'sheets-receiver' });
 }

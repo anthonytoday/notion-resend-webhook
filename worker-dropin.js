@@ -21,9 +21,88 @@
  *                                   (not audiences). "General" = 3bd09f4b-0b72-4ed3-b5d2-f4c40dd99bfe
  *   RESEND_EVENT_NAME    (plain)    optional, e.g. "template.downloaded" — leave unset
  *                                   until the Resend Automation is built and published
+ *   NOTION_TOKEN         (secret)   optional. Internal integration token (ntn_...).
+ *                                   Unset = the Notion step is skipped silently.
+ *   NOTION_DB_ID         (plain)    optional. Marketplace Downloads database id.
+ *
+ * NOTION STEP (added July 29, 2026)
+ *   Third independent sink alongside Resend and Google Sheets. One row per download,
+ *   written for EVERY download including ungated ones with no email, mirroring the
+ *   Sheets design rule. It runs after the Resend call so it can record the outcome,
+ *   which is what makes the silent-422 class of bug visible in Notion rather than
+ *   only in the Cloudflare logs. A Notion failure never blocks Resend or Sheets.
  *
  * Remove MAILERLITE_API_KEY and MAILERLITE_GROUP_ID only after verifying this works.
  */
+
+/**
+ * Notion has three constraints worth knowing, all of which return 400 rather than
+ * degrading gracefully, so each is handled explicitly below:
+ *   - a select option name cannot contain a comma
+ *   - a select option name is capped at 100 characters
+ *   - a rich_text chunk is capped at 2000 characters
+ * Template titles are author-supplied, so any of the three could be tripped by a
+ * listing rename long after this ships.
+ */
+const NOTION_VERSION = '2022-06-28';
+
+function selectName(value, fallback) {
+  const clean = String(value || '').replace(/,/g, ' ').trim().slice(0, 100);
+  return clean || fallback;
+}
+
+function richText(value, limit = 2000) {
+  return [{ text: { content: String(value == null ? '' : value).slice(0, limit) } }];
+}
+
+/**
+ * Append one row to the Marketplace Downloads database.
+ * Resolves to a short status string; never throws.
+ */
+async function writeNotionRow(env, { payload, buyerEmail, templateName, resendStatus, timestamp }) {
+  if (!env.NOTION_TOKEN || !env.NOTION_DB_ID) {
+    console.log('NOTION_TOKEN or NOTION_DB_ID not set, skipping Notion row');
+    return 'skipped_not_configured';
+  }
+
+  const properties = {
+    'Downloader': { title: richText(buyerEmail || '(no email shared)') },
+    'Template': { select: { name: selectName(templateName, 'unknown') } },
+    'Downloaded At': { date: { start: timestamp } },
+    'Email Shared': { checkbox: Boolean(buyerEmail) },
+    'Source': { select: { name: 'notion-marketplace' } },
+    'Resend Status': { select: { name: resendStatus } },
+    'Raw Payload': { rich_text: richText(JSON.stringify(payload)) },
+  };
+
+  // An empty string is rejected by the email property type; omit it instead.
+  if (buyerEmail) properties['Email'] = { email: buyerEmail };
+
+  try {
+    const response = await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.NOTION_TOKEN}`,
+        'Notion-Version': NOTION_VERSION,
+      },
+      body: JSON.stringify({ parent: { database_id: env.NOTION_DB_ID }, properties }),
+    });
+
+    if (!response.ok) {
+      // 404 here almost always means the database was never shared with the
+      // integration, not that the id is wrong. Notion returns 404 for both.
+      console.error(`Notion error: ${response.status} - ${await response.text()}`);
+      return 'failed';
+    }
+
+    console.log(`Notion row created for ${buyerEmail || '(no email)'} / ${templateName}`);
+    return 'created';
+  } catch (error) {
+    console.error('Error calling Notion:', error.message);
+    return 'failed';
+  }
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -75,6 +154,10 @@ export default {
       // against the template title before it is accepted. Empty is correct and safe:
       // greetings in the chain are name-optional ("Hey,") and personalization runs on
       // the template_purchased property instead, which is populated reliably.
+      // One timestamp shared by the Resend property and the Notion row, so the two
+      // systems never disagree about when a download happened.
+      const eventTimestamp = new Date().toISOString();
+
       const norm = (s) => String(s || '').trim().toLowerCase();
       const rawName = payload.customerName || payload.buyerName || payload.customer_name || '';
 
@@ -125,12 +208,21 @@ export default {
 
       // --- No email shared: log the row, skip Resend, return 200 -----------
       if (!buyerEmail) {
-        console.warn('No customerEmail in payload — logging to Sheets only');
-        ctx.waitUntil(sheetTask);
+        console.warn('No customerEmail in payload — logging to Sheets and Notion only');
+        ctx.waitUntil(Promise.all([
+          sheetTask,
+          writeNotionRow(env, {
+            payload,
+            buyerEmail: '',
+            templateName,
+            resendStatus: 'skipped',
+            timestamp: eventTimestamp,
+          }),
+        ]));
         return new Response(JSON.stringify({
           success: true,
           skipped: 'no_email_shared',
-          message: 'Logged to Google Sheets, no subscriber created'
+          message: 'Logged to Google Sheets and Notion, no subscriber created'
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -147,13 +239,21 @@ export default {
 
       console.log(`Processing: ${buyerEmail} for template ${templateName}`);
 
-      // --- Resend + Sheets in parallel -------------------------------------
+      // The Notion row records what Resend actually did, so the two tasks cannot be
+      // fully parallel. Rather than re-nesting them, Resend publishes its outcome
+      // through this promise and the Notion task waits on it. Everything else keeps
+      // running in parallel exactly as before.
+      let publishResendStatus;
+      const resendStatus = new Promise((resolve) => { publishResendStatus = resolve; });
+
+      // --- Resend + Sheets + Notion in parallel ----------------------------
       ctx.waitUntil(
         Promise.all([
           sheetTask,
 
           // Add the contact to Resend
           (async () => {
+            let contactStatus = 'failed';
             try {
               console.log('Sending to Resend API...');
 
@@ -164,7 +264,7 @@ export default {
                 unsubscribed: false,
                 properties: {
                   template_purchased: templateName,
-                  purchase_date: new Date().toISOString(),
+                  purchase_date: eventTimestamp,
                   source: 'notion-marketplace',
                 },
               };
@@ -189,11 +289,15 @@ export default {
               // 409 = contact already exists. Normal on a repeat download.
               if (!rsResponse.ok && rsResponse.status !== 409) {
                 console.error(`Resend error: ${rsResponse.status} - ${rsData}`);
+                contactStatus = 'failed';
               } else if (rsResponse.status === 409) {
                 console.log(`${buyerEmail} already a Resend contact (repeat download)`);
+                contactStatus = 'duplicate';
               } else {
                 console.log(`Successfully added ${buyerEmail} to Resend`);
+                contactStatus = 'created';
               }
+              publishResendStatus(contactStatus);
 
               // Belt-and-braces segment attach. `segments` in the create body above
               // covers new contacts, but a repeat downloader returns 409 and is never
@@ -224,7 +328,22 @@ export default {
               }
             } catch (error) {
               console.error('Error calling Resend:', error.message);
+            } finally {
+              // Resolving twice is a no-op, so this is purely a guarantee: however
+              // this block exits, the Notion task can never be left hanging.
+              publishResendStatus(contactStatus);
             }
+          })(),
+
+          // Append the Notion row once the Resend outcome is known.
+          (async () => {
+            await writeNotionRow(env, {
+              payload,
+              buyerEmail,
+              templateName,
+              resendStatus: await resendStatus,
+              timestamp: eventTimestamp,
+            });
           })(),
 
           // Fire the Automation trigger event — only once RESEND_EVENT_NAME is set
@@ -266,7 +385,7 @@ export default {
       return new Response(JSON.stringify({
         success: true,
         email: buyerEmail,
-        message: 'Webhook received, data sent to Resend and Google Sheets'
+        message: 'Webhook received, data sent to Resend, Google Sheets and Notion'
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },

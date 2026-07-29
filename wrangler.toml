@@ -11,6 +11,11 @@ enabled = true
 # Resend segment for new downloaders. "General" segment in your account.
 RESEND_SEGMENT_ID = "3bd09f4b-0b72-4ed3-b5d2-f4c40dd99bfe"
 
+# Marketplace Downloads database. Declared here on purpose: a wrangler deploy
+# REPLACES the dashboard's plain vars, so a value set only in the dashboard would
+# be silently wiped by the next push. Secrets are unaffected by this.
+NOTION_DB_ID = "23aa8b75-c880-4a26-b0b2-749a5d66f1e3"
+
 # Leave commented until the Resend Automation is built and published.
 # Setting this makes the worker fire automation triggers.
 # RESEND_EVENT_NAME = "template.downloaded"

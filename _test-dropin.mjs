@@ -144,6 +144,68 @@ A('no email -> Email property omitted', p.Email === undefined);
 A('no email -> email shared false', p['Email Shared'].checkbox === false);
 A('no email -> resend status skipped', p['Resend Status'].select.name === 'skipped');
 
+console.log('\n--- full live payload mapping ------------------------------------');
+
+// Verbatim from production traffic, July 29 2026.
+const LIVE = {
+  acquisitionId: 'bde0bebba7aa4484d009ee9520fc075fbea651c65edc933afc8019f210b5abbe',
+  time: 1785307042085,
+  customerEmail: '',
+  productType: 'Template',
+  templateName: 'Dream Travel Planner',
+  templateSlug: 'best-travel-planner-lite',
+  name: 'Dream Travel Planner',
+  slug: 'best-travel-planner-lite',
+  discountedPrice: 0,
+  listingPrice: 0,
+  couponCode: '',
+  event: 'marketplace.purchase',
+  locale: 'en-US',
+  source: 'in_app',
+  totalCustomerPayment: 0,
+};
+
+r = await post(LIVE);
+p = notionProps();
+A('slug mapped', p['Product Slug'].rich_text[0].text.content === 'best-travel-planner-lite');
+A('acquisition id mapped', p['Acquisition ID'].rich_text[0].text.content === LIVE.acquisitionId);
+A('locale mapped', p.Locale.select.name === 'en-US');
+A('channel mapped from payload.source', p.Channel.select.name === 'in_app');
+A('product type mapped', p['Product Type'].select.name === 'Template');
+A('record origin webhook', p['Record Origin'].select.name === 'webhook');
+A('status inferred from event', p.Status.select.name === 'Succeeded');
+A('listing price is 0 not null', p['Listing Price'].number === 0);
+A('discounted price is 0 not null', p['Discounted Price'].number === 0);
+A('customer payment is 0 not null', p['Customer Payment'].number === 0);
+A('empty coupon omitted', p['Coupon Code'] === undefined);
+A('no email -> Email omitted', p.Email === undefined);
+A('tax + seller transfer absent (not in webhook)', p['Tax Amount'] === undefined && p['Seller Transfer'] === undefined);
+A(
+  'downloaded-at comes from payload.time, not arrival',
+  p['Downloaded At'].date.start === new Date(1785307042085).toISOString()
+);
+
+r = await post({ ...LIVE, customerEmail: 'buyer@corp.com', listingPrice: 29, discountedPrice: 19.5, totalCustomerPayment: 19.5, couponCode: 'LAUNCH20', locale: 'fr-FR', source: 'mobile_app' });
+p = notionProps();
+A('paid template prices mapped', p['Listing Price'].number === 29 && p['Discounted Price'].number === 19.5);
+A('customer payment mapped', p['Customer Payment'].number === 19.5);
+A('coupon mapped when present', p['Coupon Code'].rich_text[0].text.content === 'LAUNCH20');
+A('non-US locale mapped', p.Locale.select.name === 'fr-FR');
+A('mobile channel mapped', p.Channel.select.name === 'mobile_app');
+A('email present -> Email + title', p.Email.email === 'buyer@corp.com' && p.Downloader.title[0].text.content === 'buyer@corp.com');
+
+r = await post({ ...LIVE, time: 'garbage' });
+p = notionProps();
+A('bad time falls back to arrival timestamp', !Number.isNaN(Date.parse(p['Downloaded At'].date.start)));
+r = await post({ ...LIVE, time: 0 });
+A('zero time falls back to arrival timestamp', !Number.isNaN(Date.parse(notionProps()['Downloaded At'].date.start)));
+
+r = await post({ customerEmail: 'old@corp.com', templateName: 'Legacy Payload' });
+p = notionProps();
+A('old 3-field payload still writes', p.Template.select.name === 'Legacy Payload');
+A('old payload -> optional props simply absent', p['Product Slug'] === undefined && p.Locale === undefined);
+A('old payload -> no status inferred', p.Status === undefined);
+
 console.log('\n--- failure isolation -------------------------------------------');
 
 r = await post({ customerEmail: 'a@b.com', templateName: 'T' }, { NOTION_TOKEN: '' });

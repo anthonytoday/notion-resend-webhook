@@ -46,6 +46,25 @@
  */
 const NOTION_VERSION = '2022-06-28';
 
+/**
+ * The live marketplace payload, confirmed from production traffic July 29, 2026:
+ *
+ *   { acquisitionId, time, customerEmail, productType, templateName, templateSlug,
+ *     name, slug, discountedPrice, listingPrice, couponCode, event, locale,
+ *     source, totalCustomerPayment }
+ *
+ * This is much richer than the three fields the runbook documented in July, so
+ * every field above is now mapped to a property rather than only surviving inside
+ * Raw Payload. Two fields the webhook does NOT carry are Tax Amount and Seller
+ * Transfer, which exist only in the CSV export, so those stay blank on webhook
+ * rows by design.
+ *
+ * Notion returns 400 rather than degrading on three input rules, all handled below:
+ *   - a select option name cannot contain a comma
+ *   - a select option name is capped at 100 characters
+ *   - a rich_text chunk is capped at 2000 characters
+ */
+
 function selectName(value, fallback) {
   const clean = String(value || '').replace(/,/g, ' ').trim().slice(0, 100);
   return clean || fallback;
@@ -53,6 +72,36 @@ function selectName(value, fallback) {
 
 function richText(value, limit = 2000) {
   return [{ text: { content: String(value == null ? '' : value).slice(0, limit) } }];
+}
+
+/** First non-empty string among the candidates. */
+function firstOf(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+/** Notion rejects NaN on a number property; null clears it instead. */
+function numberOrNull(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * payload.time is epoch milliseconds and is the moment the download actually
+ * happened, which is strictly better than the moment the webhook reached us.
+ * Falls back to arrival time if it is missing or implausible.
+ */
+function downloadTimestamp(payload, arrivalIso) {
+  const ms = Number(payload && payload.time);
+  if (!Number.isFinite(ms) || ms <= 0) return arrivalIso;
+  const when = new Date(ms);
+  const year = when.getUTCFullYear();
+  if (Number.isNaN(when.getTime()) || year < 2015 || year > 2100) return arrivalIso;
+  return when.toISOString();
 }
 
 /**
@@ -65,18 +114,44 @@ async function writeNotionRow(env, { payload, buyerEmail, templateName, resendSt
     return 'skipped_not_configured';
   }
 
+  const raw = payload || {};
+  const slug        = firstOf(raw.templateSlug, raw.slug, raw.product_slug);
+  const productType = firstOf(raw.productType, raw.product_type);
+  const locale      = firstOf(raw.locale);
+  const channel     = firstOf(raw.source);
+  const coupon      = firstOf(raw.couponCode, raw.coupon_code);
+  const acquisition = firstOf(raw.acquisitionId, raw.acquisition_id);
+
   const properties = {
     'Downloader': { title: richText(buyerEmail || '(no email shared)') },
     'Template': { select: { name: selectName(templateName, 'unknown') } },
-    'Downloaded At': { date: { start: timestamp } },
+    'Downloaded At': { date: { start: downloadTimestamp(raw, timestamp) } },
     'Email Shared': { checkbox: Boolean(buyerEmail) },
     'Source': { select: { name: 'notion-marketplace' } },
+    'Record Origin': { select: { name: 'webhook' } },
     'Resend Status': { select: { name: resendStatus } },
-    'Raw Payload': { rich_text: richText(JSON.stringify(payload)) },
+    'Listing Price': { number: numberOrNull(raw.listingPrice) },
+    'Discounted Price': { number: numberOrNull(raw.discountedPrice) },
+    'Customer Payment': { number: numberOrNull(raw.totalCustomerPayment) },
+    'Raw Payload': { rich_text: richText(JSON.stringify(raw)) },
   };
 
-  // An empty string is rejected by the email property type; omit it instead.
-  if (buyerEmail) properties['Email'] = { email: buyerEmail };
+  // Empty strings are rejected outright by the email, select and rich_text-backed
+  // property types, so each optional field is only attached when it has a value.
+  if (buyerEmail)   properties['Email']          = { email: buyerEmail };
+  if (slug)         properties['Product Slug']   = { rich_text: richText(slug) };
+  if (acquisition)  properties['Acquisition ID'] = { rich_text: richText(acquisition) };
+  if (coupon)       properties['Coupon Code']    = { rich_text: richText(coupon) };
+  if (productType)  properties['Product Type']   = { select: { name: selectName(productType, 'Template') } };
+  if (locale)       properties['Locale']         = { select: { name: selectName(locale, '') } };
+  if (channel)      properties['Channel']        = { select: { name: selectName(channel, '') } };
+
+  // The webhook only ever fires on a completed acquisition, so Status is inferred
+  // from the event name. Refunds never arrive this way: they show up only in the
+  // CSV export, so this column can go stale and is reconciled from the export.
+  if (firstOf(raw.event) === 'marketplace.purchase') {
+    properties['Status'] = { select: { name: 'Succeeded' } };
+  }
 
   try {
     const response = await fetch('https://api.notion.com/v1/pages', {

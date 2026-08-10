@@ -16,6 +16,11 @@ RESEND_SEGMENT_ID = "3bd09f4b-0b72-4ed3-b5d2-f4c40dd99bfe"
 # be silently wiped by the next push. Secrets are unaffected by this.
 NOTION_DB_ID = "23aa8b75-c880-4a26-b0b2-749a5d66f1e3"
 
+# Listings Tracker database. Lets the worker link each download row to its
+# listing (Listing relation, matched on Product Slug) so the tracker's Downloads
+# rollup stays live. Plain var, declared here for the same reason as NOTION_DB_ID.
+NOTION_TRACKER_DB_ID = "8a2abf5c-1628-4048-84c2-6f3f3374a73c"
+
 # Leave commented until the Resend Automation is built and published.
 # Setting this makes the worker fire automation triggers.
 # RESEND_EVENT_NAME = "template.downloaded"

@@ -13,6 +13,8 @@
  *   3. Missing email now returns 200 "skipped" instead of 400, so ungated template
  *      downloads do not look like failures to Notion and cannot trip its retry logic
  *   4. Env var guards updated to the Resend vars
+ *   5. Download rows are linked to their Listings Tracker row (Listing relation,
+ *      matched on Product Slug), so the tracker's Downloads rollup stays live
  *
  * ENV VARS
  *   RESEND_API_KEY       (secret)   required
@@ -24,6 +26,10 @@
  *   NOTION_TOKEN         (secret)   optional. Internal integration token (ntn_...).
  *                                   Unset = the Notion step is skipped silently.
  *   NOTION_DB_ID         (plain)    optional. Marketplace Downloads database id.
+ *   NOTION_TRACKER_DB_ID (plain)    optional. Listings Tracker database id. When set,
+ *                                   each download row is linked to the tracker row whose
+ *                                   Slug matches the payload slug, which keeps the
+ *                                   tracker's Downloads rollup live with no copied number.
  *
  * NOTION STEP (added July 29, 2026)
  *   Third independent sink alongside Resend and Google Sheets. One row per download,
@@ -31,6 +37,8 @@
  *   Sheets design rule. It runs after the Resend call so it can record the outcome,
  *   which is what makes the silent-422 class of bug visible in Notion rather than
  *   only in the Cloudflare logs. A Notion failure never blocks Resend or Sheets.
+ *   When NOTION_TRACKER_DB_ID is set, the row also carries a Listing relation to the
+ *   matching Listings Tracker page, resolved by slug at write time.
  *
  * Remove MAILERLITE_API_KEY and MAILERLITE_GROUP_ID only after verifying this works.
  */
@@ -105,6 +113,43 @@ function downloadTimestamp(payload, arrivalIso) {
 }
 
 /**
+ * Resolve the Listings Tracker row for a marketplace slug, so the new download
+ * row can be linked to it. Returns the page id, or null when the slug is unknown
+ * or the tracker is not configured. Never throws: the download row matters more
+ * than the link.
+ */
+async function findListingPageId(env, slug) {
+  if (!env.NOTION_TRACKER_DB_ID) return null;
+  try {
+    const response = await fetch(`https://api.notion.com/v1/databases/${env.NOTION_TRACKER_DB_ID}/query`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.NOTION_TOKEN}`,
+        'Notion-Version': NOTION_VERSION,
+      },
+      body: JSON.stringify({
+        page_size: 1,
+        filter: { property: 'Slug', rich_text: { equals: slug } },
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`Tracker query error: ${response.status} - ${await response.text()}`);
+      return null;
+    }
+
+    const data = await response.json();
+    if (data.results && data.results.length > 0) return data.results[0].id;
+    console.warn(`No Listings Tracker row for slug ${slug}`);
+    return null;
+  } catch (error) {
+    console.error('Error querying Listings Tracker:', error.message);
+    return null;
+  }
+}
+
+/**
  * Append one row to the Marketplace Downloads database.
  * Resolves to a short status string; never throws.
  */
@@ -151,6 +196,13 @@ async function writeNotionRow(env, { payload, buyerEmail, templateName, resendSt
   // CSV export, so this column can go stale and is reconciled from the export.
   if (firstOf(raw.event) === 'marketplace.purchase') {
     properties['Status'] = { select: { name: 'Succeeded' } };
+  }
+
+  // Link the row to its Listings Tracker entry, matched on the slug. This is what
+  // lets the tracker compute Downloads as a live rollup instead of a copied number.
+  if (slug) {
+    const listingId = await findListingPageId(env, slug);
+    if (listingId) properties['Listing'] = { relation: [{ id: listingId }] };
   }
 
   try {

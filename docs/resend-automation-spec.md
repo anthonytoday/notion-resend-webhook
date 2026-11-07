@@ -81,7 +81,7 @@ Resend Templates use the event payload. Replace MailerLite's `{$name}` with:
 
 ## 6. Affiliate link and disclosure
 
-Canonical link: `https://affiliate.notion.so/0x8u16p4sff1`
+Canonical link: `https://affiliate.notion.so/anthony-today`
 Required on every use: the words `(affiliate link)` adjacent to the CTA. Program rules also ban self-referrals, incentivized signups, and paid ads on Notion-branded keywords.
 
 ---

@@ -23,12 +23,12 @@ jobs:
       - name: Health check (GET)
         run: |
           curl -sS -w '\nHTTP %{http_code}\n' \
-            https://notion-mailerlite-webhook.learningamazonfba.workers.dev/
+            https://marketplace-downloads-webhook.learningamazonfba.workers.dev/
 
       - name: Fire test payload (POST)
         run: |
           curl -sS -w '\nHTTP %{http_code}\n' \
-            -X POST https://notion-mailerlite-webhook.learningamazonfba.workers.dev/ \
+            -X POST https://marketplace-downloads-webhook.learningamazonfba.workers.dev/ \
             -H 'Content-Type: application/json' \
             -d '{
               "time": '"$(date +%s000)"',

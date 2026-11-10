@@ -1,6 +1,9 @@
-# Keep the existing worker name: renaming changes the public URL and would
-# break the Notion profile webhook until it is updated there too.
-name = "notion-mailerlite-webhook"
+# Renamed from notion-mailerlite-webhook on 10 Nov 2026 (MailerLite is gone).
+# Public URL: https://marketplace-downloads-webhook.learningamazonfba.workers.dev/
+# This URL is registered as the Webhook URL in the Notion creator profile
+# (app.notion.com/profile > Settings). Renaming again changes the URL and breaks
+# that registration until it is updated there too.
+name = "marketplace-downloads-webhook"
 main = "worker-dropin.js"
 compatibility_date = "2026-06-11"
 

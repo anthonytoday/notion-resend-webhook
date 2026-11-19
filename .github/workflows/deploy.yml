@@ -1,20 +1,22 @@
 name: Deploy worker
 
+# Manual only since 19 Nov 2026 (same pattern as sports-calendar). GitHub-hosted minutes for private
+# repos ran out on 8 Nov, so the push trigger failed on 10 Nov. The Worker is deployed by hand today
+# (last: 11 Nov). To run this workflow, register a self-hosted runner for this repo on the Hermes VPS
+# (label vps; Anthony's one-time token, /opt/gh-runner/setup.sh), then Actions > Deploy worker > Run workflow.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'worker-dropin.js'
-      - 'wrangler.toml'
-      - 'package.json'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vps]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:

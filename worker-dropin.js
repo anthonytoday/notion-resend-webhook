@@ -268,6 +268,15 @@ export default {
       const buyerEmail = payload.customerEmail || payload.email || '';
       const templateName = payload.templateName || payload.template || 'unknown';
 
+      // NOTION TEST PAYLOAD GUARD — deployed live by hand on 11 Nov 2026, synced into
+      // the repo on 19 Nov 2026 so a deploy from here keeps it.
+      // Notion's "Send test" fires test_webhook@notion.so / "Test template". Acknowledge
+      // it and stop: no Resend contact, no Sheets row, no Notion row.
+      if (/^test_webhook@notion\.so$/i.test(String(buyerEmail).trim()) || /^test template$/i.test(String(templateName).trim())) {
+        console.log('Notion test payload: acknowledged, nothing written or sent');
+        return new Response(JSON.stringify({ success: true, skipped: 'notion_test_payload' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+
       // NAME HANDLING — fixed July 26, 2026.
       //
       // Notion's marketplace payload carries NO buyer name. It does send a top-level
